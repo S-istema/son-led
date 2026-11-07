@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Luz do Grave</title>
+<style>
+:root{--bg:#000;--fg:#fff;--muted:#aaa;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#000;--fg:#fff;--muted:#aaa}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:24px;text-align:center;background:var(--bg);z-index:5}
+#start h1{margin:0;font-size:2rem}
+#start p{margin:0;max-width:340px;color:var(--muted);line-height:1.45;font-size:.95rem}
+button{font:inherit;color:#000;background:#fff;border:0;border-radius:999px;padding:14px 30px;font-weight:700;font-size:1.05rem}
+#ui{position:fixed;left:0;right:0;bottom:0;padding:14px 18px calc(14px + env(safe-area-inset-bottom,0px));display:flex;gap:14px;align-items:center;justify-content:center;background:linear-gradient(transparent,rgba(0,0,0,.75));transition:opacity .4s;z-index:4}
+#ui.hide{opacity:0;pointer-events:none}
+#ui label{font-size:.85rem;color:var(--muted)}
+#ui input{width:150px;accent-color:#fff}
+#ui button{padding:8px 16px;font-size:.85rem;background:#222;color:#fff}
+#bar{position:fixed;top:env(safe-area-inset-top,0px);left:0;height:4px;width:0;background:#fff;opacity:.6;z-index:4}
+#err{color:#ff7b7b;min-height:1.2em;font-size:.9rem}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="bar"></div>
+<div id="start">
+  <h1>Luz do Grave</h1>
+  <p>Coloque o celular perto do som. A tela pisca em cores a cada grave (bumbo, baixo) e fica preta quando não há grave.</p>
+  <p>Aviso: luzes piscando podem causar desconforto em pessoas sensíveis a fotossensibilidade.</p>
+  <button id="go">Começar</button>
+  <div id="err"></div>
+</div>
+<div id="ui" class="hide">
+  <label>Sensibilidade <input id="sens" type="range" min="0" max="1" step="0.01" value="0.6"></label>
+  <button id="fs">Tela cheia</button>
+</div>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+function resize(){const d=devicePixelRatio||1;cv.width=innerWidth*d;cv.height=innerHeight*d}
+addEventListener('resize',resize);resize();
+const colors=['#ff1744','#ff9100','#ffea00','#00e676','#00e5ff','#2979ff','#d500f9','#ff4081'];
+let ci=0,glow=0,color=colors[0],level=0,avg=0,last=0,analyser,data,binLo=1,binHi=4;
+const sens=document.getElementById('sens'),bar=document.getElementById('bar'),ui=document.getElementById('ui');
+
+async function start(){
+  const err=document.getElementById('err');
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+    const ac=new (window.AudioContext||window.webkitAudioContext)();
+    await ac.resume();
+    analyser=ac.createAnalyser();analyser.fftSize=1024;analyser.smoothingTimeConstant=0.5;
+    ac.createMediaStreamSource(stream).connect(analyser);
+    data=new Uint8Array(analyser.frequencyBinCount);
+    const hz=ac.sampleRate/analyser.fftSize;
+    binLo=Math.max(1,Math.floor(40/hz));binHi=Math.max(binLo+1,Math.ceil(150/hz));
+    document.getElementById('start').style.display='none';
+    ui.classList.remove('hide');setTimeout(()=>ui.classList.add('hide'),3500);
+    try{navigator.wakeLock&&navigator.wakeLock.request('screen')}catch(e){}
+    requestAnimationFrame(loop);
+  }catch(e){err.textContent='Não consegui acessar o microfone. Permita o acesso e tente de novo.'}
+}
+document.getElementById('go').onclick=start;
+
+function loop(t){
+  analyser.getByteFrequencyData(data);
+  let s=0;for(let i=binLo;i<=binHi;i++)s+=data[i];
+  level=s/((binHi-binLo+1)*255);
+  const floor=0.5-parseFloat(sens.value)*0.4;
+  if(level>floor&&level>avg*1.25&&t-last>140){
+    last=t;ci=(ci+1)%colors.length;color=colors[ci];glow=1;
+  }
+  avg=avg*0.96+level*0.04;
+  glow*=0.88;
+  bar.style.width=(level*100)+'%';
+  const w=cv.width,h=cv.height;
+  ctx.globalCompositeOperation='source-over';
+  ctx.fillStyle='#000';ctx.fillRect(0,0,w,h);
+  if(glow>0.01){
+    ctx.globalAlpha=glow;
+    ctx.fillStyle=color;ctx.fillRect(0,0,w,h);
+    const g=ctx.createRadialGradient(w/2,h/2,0,w/2,h/2,Math.max(w,h)*0.6);
+    g.addColorStop(0,'rgba(255,255,255,0.55)');g.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle=g;ctx.fillRect(0,0,w,h);
+    ctx.globalAlpha=1;
+  }
+  requestAnimationFrame(loop);
+}
+
+let hideT;
+function showUI(){ui.classList.remove('hide');clearTimeout(hideT);hideT=setTimeout(()=>ui.classList.add('hide'),3500)}
+cv.addEventListener('pointerdown',showUI);
+ui.addEventListener('pointerdown',showUI);
+document.getElementById('fs').onclick=()=>{
+  try{document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen()}catch(e){}
+};
+</script>
+</body>
+</html>
